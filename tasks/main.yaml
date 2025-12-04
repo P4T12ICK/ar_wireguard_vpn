@@ -82,21 +82,18 @@
   when: vpn_clients | length > 0
   changed_when: false
 
+- name: Build client list with keys
+  ansible.builtin.set_fact:
+    vpn_clients_with_keys: "{{ vpn_clients_with_keys | default([]) + [item.0 | combine({'private_key': (item.1.content | b64decode | trim), 'public_key': (item.2.content | b64decode | trim)})] }}"
+  loop: "{{ vpn_clients | zip(client_private_keys.results, client_public_keys.results) | list }}"
+  when: vpn_clients | length > 0
+
 - name: Set client keys as facts
   ansible.builtin.set_fact:
     vpn_clients: "{{ vpn_clients_with_keys }}"
-  vars:
-    vpn_clients_with_keys: |
-      {%- set result = [] -%}
-      {%- for i in range(vpn_clients | length) -%}
-        {%- set client = vpn_clients[i] | combine({
-          'private_key': (client_private_keys.results[i].content | b64decode | trim),
-          'public_key': (client_public_keys.results[i].content | b64decode | trim)
-        }) -%}
-        {%- set _ = result.append(client) -%}
-      {%- endfor -%}
-      {{ result }}
-  when: vpn_clients | length > 0
+  when: 
+    - vpn_clients | length > 0
+    - vpn_clients_with_keys is defined
 
 - name: Wireguard wg0 configuration
   ansible.builtin.template:
