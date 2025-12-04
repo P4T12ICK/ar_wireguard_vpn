@@ -85,8 +85,15 @@
 - name: Build merged client list with keys
   ansible.builtin.set_fact:
     _vpn_clients_merged: "{{ _vpn_clients_merged | default([]) + [item.0 | combine({'private_key': (item.1.content | b64decode | trim), 'public_key': (item.2.content | b64decode | trim)})] }}"
-  loop: "{{ vpn_clients | zip(client_private_keys.results, client_public_keys.results) | list }}"
-  when: vpn_clients | length > 0
+  loop: "{{ vpn_clients | zip(client_private_keys.results | default([]), client_public_keys.results | default([])) | list }}"
+  when: 
+    - vpn_clients | length > 0
+    - client_private_keys is defined
+    - client_public_keys is defined
+    - client_private_keys.results is defined
+    - client_public_keys.results is defined
+    - (client_private_keys.results | length) == (vpn_clients | length)
+    - (client_public_keys.results | length) == (vpn_clients | length)
 
 - name: Update vpn_clients with merged keys
   ansible.builtin.set_fact:
@@ -94,6 +101,15 @@
   when: 
     - vpn_clients | length > 0
     - _vpn_clients_merged is defined
+    - _vpn_clients_merged | length > 0
+
+- name: Verify client keys were merged
+  ansible.builtin.fail:
+    msg: "Failed to merge client keys. Ensure client key files were generated and read successfully. Check that 'Read client private keys' and 'Read client public keys' tasks completed successfully."
+  when:
+    - vpn_clients | length > 0
+    - vpn_clients[0] is defined
+    - vpn_clients[0].private_key is not defined
 
 - name: Wireguard wg0 configuration
   ansible.builtin.template:
@@ -112,7 +128,10 @@
     group: root
     mode: 0600
   loop: "{{ vpn_clients }}"
-  when: vpn_clients_dir is defined
+  when: 
+    - vpn_clients_dir is defined
+    - vpn_clients | length > 0
+    - item.private_key is defined
 
 - name: Enable WireGuard service
   ansible.builtin.systemd:
