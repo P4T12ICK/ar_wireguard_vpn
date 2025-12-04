@@ -118,13 +118,3 @@
   when: vpn_clients_dir is defined and vpn_clients | length > 0
   changed_when: false
 
-- name: Print all client WireGuard configurations
-  ansible.builtin.debug:
-    msg: |
-      ============================================
-      Client: {{ item.item.name }}
-      ============================================
-      {{ item.content | b64decode }}
-      
-  loop: "{{ client_configs.results | default([]) }}"
-  when: vpn_clients_dir is defined and vpn_clients | length > 0
