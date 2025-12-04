@@ -1,0 +1,124 @@
+---
+- name: Enable IP forwarding in sysctl.conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^#?net\.ipv4\.ip_forward='
+    line: 'net.ipv4.ip_forward=1'
+    state: present
+
+- name: Apply sysctl changes
+  ansible.builtin.command: sysctl -p
+  changed_when: false
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+  when: ansible_distribution == "Ubuntu" or ansible_distribution == "Debian"
+
+- name: Ensure wireguard installed
+  ansible.builtin.package:
+    name: "{{ vpn_package }}"
+
+- name: Generate WireGuard server keys
+  ansible.builtin.shell: |
+    wg genkey | tee /etc/wireguard/server_private.key | wg pubkey | tee /etc/wireguard/server_public.key
+  args:
+    creates: /etc/wireguard/server_public.key
+
+- name: Set permissions on server private key
+  ansible.builtin.file:
+    path: /etc/wireguard/server_private.key
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Generate WireGuard client keys
+  ansible.builtin.shell: |
+    wg genkey | tee /etc/wireguard/{{ item.name }}_private.key | wg pubkey | tee /etc/wireguard/{{ item.name }}_public.key
+  args:
+    creates: /etc/wireguard/{{ item.name }}_public.key
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+
+- name: Set permissions on client private keys
+  ansible.builtin.file:
+    path: /etc/wireguard/{{ item.name }}_private.key
+    mode: '0600'
+    owner: root
+    group: root
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+
+- name: Read server private key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/server_private.key
+  register: server_private_key_content
+  changed_when: false
+
+- name: Read server public key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/server_public.key
+  register: server_public_key_content
+  changed_when: false
+
+- name: Set server keys as facts
+  ansible.builtin.set_fact:
+    vpn_private_key: "{{ server_private_key_content.content | b64decode | trim }}"
+    vpn_public_key: "{{ server_public_key_content.content | b64decode | trim }}"
+
+- name: Read client private keys
+  ansible.builtin.slurp:
+    src: /etc/wireguard/{{ item.name }}_private.key
+  register: client_private_keys
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+  changed_when: false
+
+- name: Read client public keys
+  ansible.builtin.slurp:
+    src: /etc/wireguard/{{ item.name }}_public.key
+  register: client_public_keys
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+  changed_when: false
+
+- name: Set client keys as facts
+  ansible.builtin.set_fact:
+    vpn_clients: "{{ vpn_clients_with_keys }}"
+  vars:
+    vpn_clients_with_keys: |
+      {%- set result = [] -%}
+      {%- for i in range(vpn_clients | length) -%}
+        {%- set client = vpn_clients[i] | combine({
+          'private_key': (client_private_keys.results[i].content | b64decode | trim),
+          'public_key': (client_public_keys.results[i].content | b64decode | trim)
+        }) -%}
+        {%- set _ = result.append(client) -%}
+      {%- endfor -%}
+      {{ result }}
+  when: vpn_clients | length > 0
+
+- name: Wireguard wg0 configuration
+  ansible.builtin.template:
+    src: templates/wg0.j2
+    dest: "/etc/wireguard/wg0.conf"
+    owner: root
+    group: root
+    mode: 0640
+  notify: Restart wireguard
+
+- name: Wireguard client configuration file
+  ansible.builtin.template:
+    dest: "{{ vpn_clients_dir }}/{{ item.name }}.conf"
+    src: templates/client.j2
+    owner: root
+    group: root
+    mode: 0600
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients_dir is defined
+
+- name: Enable WireGuard service
+  ansible.builtin.systemd:
+    name: wg-quick@wg0
+    enabled: true
+    daemon_reload: true

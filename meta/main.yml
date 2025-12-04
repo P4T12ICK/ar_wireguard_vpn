@@ -1,0 +1,15 @@
+galaxy_info:
+  author: p4t12ick
+  description: Configure a Wireguard-based VPN service and provision client config files.
+  company: Splunk
+
+  license: Apache License 2.0
+
+  min_ansible_version: "2.10"
+
+  galaxy_tags:
+    - networking
+    - vpn
+    - wireguard
+
+dependencies: []

@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+
+[Interface]
+PrivateKey = {{ vpn_private_key }}
+Address = {{ vpn_address }}
+ListenPort = {{ vpn_listen_port }}
+SaveConfig = true
+
+# Enable IP forwarding and NAT
+PostUp = iptables -t nat -I POSTROUTING -o {{ vpn_physical_interface }} -j MASQUERADE
+PreDown = iptables -t nat -D POSTROUTING -o {{ vpn_physical_interface }} -j MASQUERADE
+
+{% for client in vpn_clients %}
+# {{ client['name'] }}
+[Peer]
+PublicKey = {{ client['public_key'] }}
+AllowedIPs = {{ client['address'] }}
+
+{% endfor %}
