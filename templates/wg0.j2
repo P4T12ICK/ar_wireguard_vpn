@@ -10,12 +10,10 @@ SaveConfig = true
 PostUp = iptables -t nat -I POSTROUTING -o {{ vpn_physical_interface }} -j MASQUERADE
 PreDown = iptables -t nat -D POSTROUTING -o {{ vpn_physical_interface }} -j MASQUERADE
 
-{% for client in vpn_clients | default([]) %}
-{% if client.get('public_key') and client.get('address') %}
+{% for client, key_result in vpn_clients | default([]) | zip((client_public_keys.results | default([])) if client_public_keys is defined else []) %}
 # {{ client['name'] }}
 [Peer]
-PublicKey = {{ client['public_key'] }}
+PublicKey = {{ key_result.content | b64decode | trim }}
 AllowedIPs = {{ client['address'] }}
 
-{% endif %}
 {% endfor %}

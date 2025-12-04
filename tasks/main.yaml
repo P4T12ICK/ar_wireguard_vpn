@@ -1,4 +1,20 @@
 ---
+- name: Debug - Show vpn_clients variable
+  ansible.builtin.debug:
+    var: vpn_clients
+
+- name: Debug - Show vpn_clients_dir
+  ansible.builtin.debug:
+    var: vpn_clients_dir
+
+- name: Debug - Show vpn_endpoint
+  ansible.builtin.debug:
+    var: vpn_endpoint
+
+- name: Debug - Show vpn_listen_port
+  ansible.builtin.debug:
+    var: vpn_listen_port
+
 - name: Enable IP forwarding in sysctl.conf
   ansible.builtin.lineinfile:
     path: /etc/sysctl.conf
@@ -66,36 +82,47 @@
     vpn_private_key: "{{ server_private_key_content.content | b64decode | trim }}"
     vpn_public_key: "{{ server_public_key_content.content | b64decode | trim }}"
 
-- name: Store original client list
-  ansible.builtin.set_fact:
-    vpn_clients_original: "{{ vpn_clients }}"
+- name: Debug - Show server private key (first 20 chars)
+  ansible.builtin.debug:
+    msg: "Server private key (first 20 chars): {{ vpn_private_key[:20] }}"
+
+- name: Debug - Show server public key (first 20 chars)
+  ansible.builtin.debug:
+    msg: "Server public key (first 20 chars): {{ vpn_public_key[:20] }}"
+
+- name: Read client private keys
+  ansible.builtin.slurp:
+    src: /etc/wireguard/{{ item.name }}_private.key
+  register: client_private_keys
+  loop: "{{ vpn_clients }}"
   when: vpn_clients | length > 0
 
-- name: Initialize empty client list with keys
-  ansible.builtin.set_fact:
-    vpn_clients: []
+- name: Debug - Show client_private_keys results
+  ansible.builtin.debug:
+    var: client_private_keys
+  when: vpn_clients | length > 0
 
-- name: Read client keys and add to client data
-  block:
-    - name: Read client private key
-      ansible.builtin.slurp:
-        src: /etc/wireguard/{{ client_item.name }}_private.key
-      register: client_private_key
-      changed_when: false
+- name: Debug - Show client_private_keys.results count
+  ansible.builtin.debug:
+    msg: "Number of client private keys read: {{ client_private_keys.results | length | default(0) }}"
+  when: vpn_clients | length > 0
 
-    - name: Read client public key
-      ansible.builtin.slurp:
-        src: /etc/wireguard/{{ client_item.name }}_public.key
-      register: client_public_key
-      changed_when: false
+- name: Read client public keys
+  ansible.builtin.slurp:
+    src: /etc/wireguard/{{ item.name }}_public.key
+  register: client_public_keys
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
 
-    - name: Add keys to client in vpn_clients list
-      ansible.builtin.set_fact:
-        vpn_clients: "{{ vpn_clients + [client_item | combine({'private_key': (client_private_key.content | b64decode | trim), 'public_key': (client_public_key.content | b64decode | trim)})] }}"
-  loop: "{{ vpn_clients_original }}"
-  loop_control:
-    loop_var: client_item
-  when: vpn_clients_original | length > 0
+- name: Debug - Show client_public_keys results
+  ansible.builtin.debug:
+    var: client_public_keys
+  when: vpn_clients | length > 0
+
+- name: Debug - Show client_public_keys.results count
+  ansible.builtin.debug:
+    msg: "Number of client public keys read: {{ client_public_keys.results | length | default(0) }}"
+  when: vpn_clients | length > 0
 
 - name: Wireguard wg0 configuration
   ansible.builtin.template:
@@ -106,18 +133,50 @@
     mode: 0640
   notify: Restart wireguard
 
+- name: Debug - Show vpn_clients before zip
+  ansible.builtin.debug:
+    var: vpn_clients
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
+
+- name: Debug - Show client_private_keys.results before zip
+  ansible.builtin.debug:
+    var: client_private_keys.results
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
+
+- name: Set combined client data with private keys
+  ansible.builtin.set_fact:
+    vpn_clients_with_keys: "{{ vpn_clients | zip(client_private_keys.results | default([])) | list }}"
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
+
+- name: Debug - Show vpn_clients_with_keys after zip
+  ansible.builtin.debug:
+    var: vpn_clients_with_keys
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
+
+- name: Debug - Show vpn_clients_with_keys count
+  ansible.builtin.debug:
+    msg: "Number of clients with keys: {{ vpn_clients_with_keys | length | default(0) }}"
+  when: vpn_clients_dir is defined and vpn_clients_with_keys is defined
+
+- name: Debug - Show client config item before template
+  ansible.builtin.debug:
+    msg: |
+      Client: {{ item[0].name }}
+      Address: {{ item[0].address }}
+      Private key file exists: {{ item[1].content is defined }}
+      Destination: {{ vpn_clients_dir }}/{{ item[0].name }}.conf
+  loop: "{{ vpn_clients_with_keys | default([]) }}"
+  when: vpn_clients_dir is defined and vpn_clients_with_keys is defined
+
 - name: Wireguard client configuration file
   ansible.builtin.template:
-    dest: "{{ vpn_clients_dir }}/{{ item.name }}.conf"
+    dest: "{{ vpn_clients_dir }}/{{ item[0].name }}.conf"
     src: templates/client.j2
     owner: root
     group: root
     mode: 0600
-  loop: "{{ vpn_clients }}"
-  when: 
-    - vpn_clients_dir is defined
-    - vpn_clients | length > 0
-    - item.private_key is defined
+  loop: "{{ vpn_clients_with_keys | default([]) }}"
+  when: vpn_clients_dir is defined and vpn_clients_with_keys is defined
 
 - name: Enable WireGuard service
   ansible.builtin.systemd:
