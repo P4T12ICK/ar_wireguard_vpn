@@ -66,50 +66,36 @@
     vpn_private_key: "{{ server_private_key_content.content | b64decode | trim }}"
     vpn_public_key: "{{ server_public_key_content.content | b64decode | trim }}"
 
-- name: Read client private keys
-  ansible.builtin.slurp:
-    src: /etc/wireguard/{{ item.name }}_private.key
-  register: client_private_keys
-  loop: "{{ vpn_clients }}"
-  when: vpn_clients | length > 0
-  changed_when: false
-
-- name: Read client public keys
-  ansible.builtin.slurp:
-    src: /etc/wireguard/{{ item.name }}_public.key
-  register: client_public_keys
-  loop: "{{ vpn_clients }}"
-  when: vpn_clients | length > 0
-  changed_when: false
-
-- name: Build merged client list with keys
+- name: Store original client list
   ansible.builtin.set_fact:
-    _vpn_clients_merged: "{{ _vpn_clients_merged | default([]) + [item.0 | combine({'private_key': (item.1.content | b64decode | trim), 'public_key': (item.2.content | b64decode | trim)})] }}"
-  loop: "{{ vpn_clients | zip(client_private_keys.results | default([]), client_public_keys.results | default([])) | list }}"
-  when: 
-    - vpn_clients | length > 0
-    - client_private_keys is defined
-    - client_public_keys is defined
-    - client_private_keys.results is defined
-    - client_public_keys.results is defined
-    - (client_private_keys.results | length) == (vpn_clients | length)
-    - (client_public_keys.results | length) == (vpn_clients | length)
+    vpn_clients_original: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
 
-- name: Update vpn_clients with merged keys
+- name: Initialize empty client list with keys
   ansible.builtin.set_fact:
-    vpn_clients: "{{ _vpn_clients_merged }}"
-  when: 
-    - vpn_clients | length > 0
-    - _vpn_clients_merged is defined
-    - _vpn_clients_merged | length > 0
+    vpn_clients: []
 
-- name: Verify client keys were merged
-  ansible.builtin.fail:
-    msg: "Failed to merge client keys. Ensure client key files were generated and read successfully. Check that 'Read client private keys' and 'Read client public keys' tasks completed successfully."
-  when:
-    - vpn_clients | length > 0
-    - vpn_clients[0] is defined
-    - vpn_clients[0].private_key is not defined
+- name: Read client keys and add to client data
+  block:
+    - name: Read client private key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/{{ client_item.name }}_private.key
+      register: client_private_key
+      changed_when: false
+
+    - name: Read client public key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/{{ client_item.name }}_public.key
+      register: client_public_key
+      changed_when: false
+
+    - name: Add keys to client in vpn_clients list
+      ansible.builtin.set_fact:
+        vpn_clients: "{{ vpn_clients + [client_item | combine({'private_key': (client_private_key.content | b64decode | trim), 'public_key': (client_public_key.content | b64decode | trim)})] }}"
+  loop: "{{ vpn_clients_original }}"
+  loop_control:
+    loop_var: client_item
+  when: vpn_clients_original | length > 0
 
 - name: Wireguard wg0 configuration
   ansible.builtin.template:
