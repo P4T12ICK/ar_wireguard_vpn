@@ -1,0 +1,37 @@
+---
+- name: Check if client configuration files exist
+  ansible.builtin.stat:
+    path: "{{ vpn_clients_dir }}/{{ item.name }}.conf"
+  register: client_config_files
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
+  changed_when: false
+
+- name: Read client configuration files
+  ansible.builtin.slurp:
+    src: "{{ vpn_clients_dir }}/{{ item.name }}.conf"
+  register: client_configs
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
+  failed_when: false
+  changed_when: false
+
+- name: Display client configurations
+  ansible.builtin.debug:
+    msg: |
+      Client: {{ item.item.name }}
+      Config file: {{ vpn_clients_dir }}/{{ item.item.name }}.conf
+      ---
+      {{ item.content | b64decode }}
+      ---
+  loop: "{{ client_configs.results | default([]) }}"
+  when:
+    - item.content is defined
+    - item.content | length > 0
+
+- name: Warn if client configs not found
+  ansible.builtin.debug:
+    msg: "Client configuration file not found for {{ item.item.name }}"
+  loop: "{{ client_configs.results | default([]) }}"
+  when:
+    - item.content is not defined or item.content | length == 0

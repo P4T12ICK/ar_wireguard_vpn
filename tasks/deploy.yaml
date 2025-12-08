@@ -1,0 +1,168 @@
+---
+- name: Enable IP forwarding in sysctl.conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^#?net\.ipv4\.ip_forward='
+    line: 'net.ipv4.ip_forward=1'
+    state: present
+
+- name: Apply sysctl changes
+  ansible.builtin.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: true
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Ensure wireguard installed
+  ansible.builtin.package:
+    name: "{{ vpn_package }}"
+    state: present
+
+- name: Generate WireGuard server keys
+  ansible.builtin.shell: |
+    wg genkey | tee /etc/wireguard/server_private.key | wg pubkey | tee /etc/wireguard/server_public.key
+  args:
+    creates: /etc/wireguard/server_public.key
+
+- name: Check if server keys exist
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: server_key_files
+  loop:
+    - /etc/wireguard/server_private.key
+    - /etc/wireguard/server_public.key
+  changed_when: false
+
+- name: Set permissions on server private key
+  ansible.builtin.file:
+    path: /etc/wireguard/server_private.key
+    mode: '0600'
+    owner: root
+    group: root
+    state: file
+  when: server_key_files.results[0].stat.exists
+
+- name: Generate WireGuard client keys
+  ansible.builtin.shell: |
+    wg genkey | tee /etc/wireguard/{{ item.name }}_private.key | wg pubkey | tee /etc/wireguard/{{ item.name }}_public.key
+  args:
+    creates: /etc/wireguard/{{ item.name }}_public.key
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+
+- name: Check if client private keys exist
+  ansible.builtin.stat:
+    path: /etc/wireguard/{{ item.name }}_private.key
+  register: client_key_files
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+  changed_when: false
+
+- name: Set permissions on client private keys
+  ansible.builtin.file:
+    path: /etc/wireguard/{{ item.item.name }}_private.key
+    mode: '0600'
+    owner: root
+    group: root
+    state: file
+  loop: "{{ client_key_files.results | default([]) }}"
+  when:
+    - vpn_clients | length > 0
+    - item.stat.exists
+
+- name: Read server private key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/server_private.key
+  register: server_private_key_content
+  changed_when: false
+  when: server_key_files.results[0].stat.exists
+
+- name: Read server public key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/server_public.key
+  register: server_public_key_content
+  changed_when: false
+  when: server_key_files.results[1].stat.exists
+
+- name: Set server keys as facts
+  ansible.builtin.set_fact:
+    vpn_private_key: "{{ server_private_key_content.content | b64decode | trim }}"
+    vpn_public_key: "{{ server_public_key_content.content | b64decode | trim }}"
+  when:
+    - server_private_key_content is defined
+    - server_public_key_content is defined
+
+- name: Read client private keys
+  ansible.builtin.slurp:
+    src: /etc/wireguard/{{ item.name }}_private.key
+  register: client_private_keys
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+  failed_when: false
+  changed_when: false
+
+- name: Read client public keys
+  ansible.builtin.slurp:
+    src: /etc/wireguard/{{ item.name }}_public.key
+  register: client_public_keys
+  loop: "{{ vpn_clients }}"
+  when: vpn_clients | length > 0
+  failed_when: false
+  changed_when: false
+
+- name: Filter valid client public keys
+  ansible.builtin.set_fact:
+    client_public_keys: "{{ {'results': client_public_keys.results | default([]) | selectattr('content', 'defined') | list} }}"
+  when:
+    - vpn_clients | length > 0
+    - client_public_keys is defined
+    - client_public_keys.results is defined
+
+- name: Wireguard wg0 configuration
+  ansible.builtin.template:
+    src: templates/wg0.j2
+    dest: "/etc/wireguard/wg0.conf"
+    owner: root
+    group: root
+    mode: 0640
+  notify: Restart wireguard
+  when:
+    - server_private_key_content is defined
+    - server_public_key_content is defined
+    - vpn_private_key is defined
+    - vpn_public_key is defined
+
+- name: Set combined client data with private keys
+  ansible.builtin.set_fact:
+    vpn_clients_with_keys: "{{ vpn_clients | zip(client_private_keys.results | default([]) | selectattr('content', 'defined') | list) | list }}"
+  when:
+    - vpn_clients_dir is defined
+    - vpn_clients | length > 0
+    - client_private_keys is defined
+    - client_private_keys.results | selectattr('content', 'defined') | list | length > 0
+
+- name: Wireguard client configuration file
+  ansible.builtin.template:
+    dest: "{{ vpn_clients_dir }}/{{ item[0].name }}.conf"
+    src: templates/client.j2
+    owner: root
+    group: root
+    mode: 0600
+  loop: "{{ vpn_clients_with_keys | default([]) }}"
+  when:
+    - vpn_clients_dir is defined
+    - vpn_clients_with_keys is defined
+    - vpn_clients_with_keys | length > 0
+    - item[1].content is defined
+    - vpn_public_key is defined
+
+- name: Enable and start WireGuard service
+  ansible.builtin.systemd:
+    name: wg-quick@wg0
+    enabled: true
+    state: started
+    daemon_reload: true

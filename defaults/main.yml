@@ -1,4 +1,7 @@
 ---
+# Action to perform: 'deploy' (default) or 'get_config'
+wireguard_action: deploy
+
 vpn_package: wireguard
 
 vpn_interface: wg1
