@@ -7,31 +7,31 @@
   when: vpn_clients_dir is defined and vpn_clients | length > 0
   changed_when: false
 
-- name: Read client configuration files
-  ansible.builtin.slurp:
+- name: Download client configuration files to local filesystem
+  ansible.builtin.fetch:
     src: "{{ vpn_clients_dir }}/{{ item.name }}.conf"
-  register: client_configs
+    dest: "{{ client_config_local_dir | default('client_configs') }}/{{ item.name }}.conf"
+    flat: true
   loop: "{{ vpn_clients }}"
-  when: vpn_clients_dir is defined and vpn_clients | length > 0
+  when:
+    - vpn_clients_dir is defined
+    - vpn_clients | length > 0
+    - item.name is defined
+  register: fetched_configs
   failed_when: false
-  changed_when: false
 
-- name: Display client configurations
+- name: Display download status
   ansible.builtin.debug:
     msg: |
       Client: {{ item.item.name }}
-      Config file: {{ vpn_clients_dir }}/{{ item.item.name }}.conf
-      ---
-      {{ item.content | b64decode }}
-      ---
-  loop: "{{ client_configs.results | default([]) }}"
-  when:
-    - item.content is defined
-    - item.content | length > 0
+      Status: {{ 'Downloaded' if item.dest | default('') != '' else 'Not found' }}
+      Local path: {{ item.dest | default('N/A') }}
+  loop: "{{ fetched_configs.results | default([]) }}"
+  when: vpn_clients_dir is defined and vpn_clients | length > 0
 
 - name: Warn if client configs not found
   ansible.builtin.debug:
     msg: "Client configuration file not found for {{ item.item.name }}"
-  loop: "{{ client_configs.results | default([]) }}"
+  loop: "{{ fetched_configs.results | default([]) }}"
   when:
-    - item.content is not defined or item.content | length == 0
+    - item.dest is not defined or item.dest == ''

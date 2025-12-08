@@ -9,6 +9,7 @@ vpn_listen_port: 51820
 vpn_physical_interface: ens5
 vpn_address: 10.0.1.10/24
 vpn_clients_dir: /etc/wireguard
+client_config_local_dir: client_configs  # Local directory to download client configs
 # vpn_endpoint: 123.123.123.123                      # REQUIRED
 
 vpn_clients: []  # REQUIRED
